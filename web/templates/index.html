@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Adversarial Attack Detection</title>
+    <meta name="description" content="Analyze up to five images and estimate whether they are AI-generated using forensic image signals.">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="shell">
+        <header class="hero">
+            <div class="hero-copy">
+                <p class="project-name">Adversarial Attack Detection</p>
+                <p class="eyebrow">AI Image Detection</p>
+                <h1>Check up to {{ max_batch_images }} images in one pass.</h1>
+                <p class="hero-text">
+                    Upload a small batch of images and inspect forensic signals such as FFT spectrum, compression error,
+                    texture consistency, and statistical smoothness.
+                </p>
+                <div class="hero-meta">
+                    <span class="meta-pill">Batch limit: {{ max_batch_images }}</span>
+                    <span class="meta-pill">CPU-friendly analysis</span>
+                    <span class="meta-pill">No gallery storage</span>
+                </div>
+            </div>
+            <aside class="hero-panel">
+                <div class="hero-panel-card">
+                    <span class="hero-panel-kicker">Signal Stack</span>
+                    <div class="hero-panel-grid">
+                        <div class="hero-signal">
+                            <strong>FFT</strong>
+                            <span>frequency energy</span>
+                        </div>
+                        <div class="hero-signal">
+                            <strong>ELA</strong>
+                            <span>compression traces</span>
+                        </div>
+                        <div class="hero-signal">
+                            <strong>Stats</strong>
+                            <span>histogram smoothness</span>
+                        </div>
+                        <div class="hero-signal">
+                            <strong>Texture</strong>
+                            <span>micro-pattern consistency</span>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </header>
+
+        <main class="content">
+            <section class="panel upload-panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="section-label">Upload</p>
+                        <h2>Select 1 to {{ max_batch_images }} images</h2>
+                    </div>
+                    <div class="stats-box" id="appStats">
+                        <span class="stats-label">Status</span>
+                        <strong id="appStatus">Checking...</strong>
+                    </div>
+                </div>
+
+                <label for="aiImageUpload" class="dropzone" id="aiDropZone">
+                    <input type="file" id="aiImageUpload" accept="image/*" multiple hidden>
+                    <span class="dropzone-title">Drop images here or click to browse</span>
+                    <span class="dropzone-text">JPG, PNG, WebP. Analyze up to {{ max_batch_images }} images at once.</span>
+                </label>
+
+                <div class="selection-bar">
+                    <div>
+                        <span class="selection-count" id="selectionCount">No images selected</span>
+                        <p class="selection-hint">The app analyzes each image separately and returns a verdict card for each one.</p>
+                    </div>
+                    <div class="selection-actions">
+                        <button class="btn btn-secondary" id="btnClearSelection" type="button">Clear</button>
+                        <button class="btn btn-primary" id="btnAnalyzeBatch" type="button">Analyze Images</button>
+                    </div>
+                </div>
+
+                <div class="preview-grid" id="previewGrid"></div>
+            </section>
+
+            <section class="panel summary-panel" id="summaryPanel" hidden>
+                <div class="panel-head">
+                    <div>
+                        <p class="section-label">Summary</p>
+                        <h2>Batch overview</h2>
+                    </div>
+                </div>
+                <div class="summary-grid" id="summaryGrid"></div>
+            </section>
+
+            <section class="results-stack" id="resultsStack"></section>
+        </main>
+    </div>
+
+    <script>
+        window.__AI_APP_CONFIG__ = {
+            maxBatchImages: {{ max_batch_images }}
+        };
+    </script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

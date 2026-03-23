@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Adversarial Attack Detection System — Client-Side</title>
+    <meta name="description" content="Interactive client-side demo for generating and detecting adversarial attacks on neural networks. Runs 100% in your browser, no server needed.">
+    <link rel="stylesheet" href="static/css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-inner">
+                <h1 id="pageTitle">🛡️ Adversarial Attack Detection System</h1>
+                <p class="subtitle">Generate adversarial images that fool AI — see the invisible noise</p>
+                <span class="mode-badge client-badge">🌐 Client-Side Mode — Runs 100% in Your Browser</span>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <!-- Controls Section -->
+            <div class="controls-section">
+                <div class="controls-row">
+                    <div class="control-group">
+                        <label for="datasetSelect">Dataset:</label>
+                        <select id="datasetSelect">
+                            <option value="mnist">MNIST (28×28 grayscale)</option>
+                            <option value="cifar10">CIFAR-10 (32×32 color)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="imageUpload" class="upload-btn" id="uploadLabel">
+                            📁 Upload Image
+                            <input type="file" id="imageUpload" accept="image/*" style="display: none;">
+                        </label>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="attackType">Attack Type:</label>
+                        <select id="attackType">
+                            <option value="fgsm">FGSM</option>
+                            <option value="pgd">PGD</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="epsilon">Epsilon: <span id="epsilonValue">0.1</span></label>
+                        <input type="range" id="epsilon" min="0" max="0.5" step="0.05" value="0.1">
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button onclick="generateAttack()" class="btn btn-primary" id="btnGenerateAttack">⚔️ Generate Attack</button>
+                    <button onclick="detectImage()" class="btn btn-success" id="btnRunDetection">🔍 Run Detection</button>
+                </div>
+            </div>
+
+            <!-- Image Display Section -->
+            <div class="images-section">
+                <div class="image-box">
+                    <h3>Original Image</h3>
+                    <div class="image-container" id="originalDropZone">
+                        <img id="originalImage" src="" alt="Upload an image">
+                        <p class="drop-hint" id="dropHint">📷 Click upload or drag an image here</p>
+                        <div class="image-info" id="originalInfo"></div>
+                    </div>
+                </div>
+
+                <div class="arrow" id="arrowSeparator">→</div>
+
+                <div class="image-box">
+                    <h3>Adversarial Image</h3>
+                    <div class="image-container">
+                        <img id="adversarialImage" src="" alt="Generate attack first">
+                        <div class="image-info" id="adversarialInfo"></div>
+                    </div>
+                    <p class="image-caption">Looks identical to original — but fools the AI!</p>
+                </div>
+            </div>
+
+            <!-- Noise Heatmap Section -->
+            <div id="noiseSection" class="noise-section" style="display: none;">
+                <h3>🔥 Perturbation Noise Heatmap</h3>
+                <p class="noise-description">Amplified visualization of the invisible perturbation added to the image</p>
+                <div class="noise-display">
+                    <canvas id="noiseCanvas" width="256" height="256"></canvas>
+                    <div class="noise-legend">
+                        <div class="legend-bar"></div>
+                        <div class="legend-labels">
+                            <span>Low perturbation</span>
+                            <span>High perturbation</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div id="resultsSection" class="results-section" style="display: none;">
+                <h2>Detection Results</h2>
+                <div id="resultContent"></div>
+            </div>
+
+            <!-- ===== ADVERSARIAL GALLERY SECTION ===== -->
+            <div class="gallery-section" id="gallerySection">
+                <div class="gallery-header">
+                    <h2>🖼️ Adversarial Gallery</h2>
+                    <p class="gallery-subtitle">Saved locally in your browser — each card shows original, adversarial image, and amplified noise heatmap</p>
+                    <div class="gallery-actions-top">
+                        <span class="gallery-count" id="galleryCount">0 items</span>
+                        <button onclick="clearGallery()" class="btn btn-danger btn-sm" id="btnClearGallery">🗑️ Clear All</button>
+                    </div>
+                </div>
+
+                <div class="gallery-grid" id="galleryGrid">
+                    <div class="gallery-empty" id="galleryEmpty">
+                        <span class="gallery-empty-icon">📷</span>
+                        <p>No adversarial images yet</p>
+                        <p class="gallery-empty-hint">Upload an image and click "Generate Attack" to create your first adversarial example</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Statistics Section -->
+            <div class="stats-section">
+                <h3>System Information</h3>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Mode</div>
+                        <div class="stat-value" id="modelsStatus">🌐 Client-Side</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Datasets</div>
+                        <div class="stat-value">MNIST, CIFAR-10</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Attack Types</div>
+                        <div class="stat-value">FGSM, PGD</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Gallery Items</div>
+                        <div class="stat-value" id="galleryCountStat">0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>Adversarial Detection System | 🌐 Client-Side — No Server Required</p>
+        </footer>
+    </div>
+
+    <!-- Hidden canvases for image processing -->
+    <canvas id="processingCanvas" style="display:none;"></canvas>
+    <canvas id="originalCanvas" style="display:none;"></canvas>
+
+    <!-- Data attribute tells JS to use client mode -->
+    <script>window.__APP_MODE__ = 'client';</script>
+    <script src="static/js/main.js"></script>
+</body>
+</html>
