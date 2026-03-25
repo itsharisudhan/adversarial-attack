@@ -11,15 +11,26 @@ from flask import Flask, jsonify, render_template, request
 from PIL import Image
 import base64
 import io
+import logging
 import os
+import threading
 
 import numpy as np
+
+try:
+    from web.history_store import build_history_store
+except ModuleNotFoundError:
+    from history_store import build_history_store
 
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB total request size
 MAX_BATCH_IMAGES = 5
 MAX_ANALYSIS_DIM = 512
+MAX_HISTORY_ITEMS = 12
+HISTORY_PREVIEW_DIM = 256
+LOGGER = logging.getLogger(__name__)
+HISTORY_STORE = build_history_store()
 
 
 def resize_for_analysis(image_pil):
@@ -51,6 +62,13 @@ def image_to_data_url(image_pil):
     image_pil.save(buffer, format="PNG")
     encoded = base64.b64encode(buffer.getvalue()).decode()
     return f"data:image/png;base64,{encoded}"
+
+
+def make_history_preview(image_pil):
+    """Create a small preview for persisted analysis history."""
+    preview = image_pil.copy()
+    preview.thumbnail((HISTORY_PREVIEW_DIM, HISTORY_PREVIEW_DIM), Image.LANCZOS)
+    return image_to_data_url(preview)
 
 
 def analyze_fft(image_np):
@@ -485,11 +503,47 @@ def analyze_image(image_pil):
     }
 
 
+def build_history_record(filename, image_pil, analysis_result):
+    """Create a lightweight persistence record for one analysis."""
+    return {
+        "filename": filename,
+        "verdict": analysis_result["verdict"],
+        "verdict_short": analysis_result["verdict_short"],
+        "ensemble_score": analysis_result["ensemble_score"],
+        "input_preview_url": make_history_preview(image_pil),
+        "fft_spectrum_url": analysis_result["visualizations"]["fft_spectrum"],
+        "ela_heatmap_url": analysis_result["visualizations"]["ela_heatmap"],
+        "image_info": analysis_result["image_info"],
+        "detector_scores": {
+            "fft": analysis_result["detectors"]["fft"]["score"],
+            "ela": analysis_result["detectors"]["ela"]["score"],
+            "statistics": analysis_result["detectors"]["statistics"]["score"],
+            "texture": analysis_result["detectors"]["texture"]["score"],
+        },
+    }
+
+
+def persist_history_async(records):
+    """Persist history in the background so analysis latency stays low."""
+    if not HISTORY_STORE.is_enabled() or not records:
+        return
+
+    def worker():
+        try:
+            HISTORY_STORE.save_many(records)
+        except Exception as exc:
+            LOGGER.warning("History persistence worker failed: %s", exc)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def analyze_file_storage(file_storage):
     """Load and analyze one uploaded file."""
     image = Image.open(io.BytesIO(file_storage.read())).convert("RGB")
     result = analyze_image(image)
-    result["filename"] = file_storage.filename or "image"
+    filename = file_storage.filename or "image"
+    result["filename"] = filename
+    result["_history_record"] = build_history_record(filename, image, result)
     return result
 
 
@@ -505,7 +559,10 @@ def detect_ai():
     try:
         if "image" not in request.files:
             return jsonify({"error": "No image uploaded"}), 400
-        return jsonify(analyze_file_storage(request.files["image"]))
+        result = analyze_file_storage(request.files["image"])
+        history_record = result.pop("_history_record", None)
+        persist_history_async([history_record] if history_record else [])
+        return jsonify(result)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -521,9 +578,33 @@ def detect_ai_batch():
             return jsonify({"error": f"Upload up to {MAX_BATCH_IMAGES} images at a time"}), 400
 
         results = [analyze_file_storage(file_storage) for file_storage in files]
+        history_records = []
+        for result in results:
+            history_record = result.pop("_history_record", None)
+            if history_record:
+                history_records.append(history_record)
+        persist_history_async(history_records)
         return jsonify({"count": len(results), "results": results})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/history", methods=["GET"])
+def get_history():
+    """Return recent persisted analyses when history is enabled."""
+    if not HISTORY_STORE.is_enabled():
+        return jsonify({"enabled": False, "backend": HISTORY_STORE.backend_name, "results": []})
+
+    limit = request.args.get("limit", default=MAX_HISTORY_ITEMS, type=int)
+    results = HISTORY_STORE.list_recent(limit=limit)
+    return jsonify(
+        {
+            "enabled": True,
+            "backend": HISTORY_STORE.backend_name,
+            "count": len(results),
+            "results": results,
+        }
+    )
 
 
 @app.route("/api/stats", methods=["GET"])
@@ -534,6 +615,9 @@ def get_stats():
             "mode": "ai_detection_only",
             "max_batch_images": MAX_BATCH_IMAGES,
             "max_request_mb": app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024),
+            "history_enabled": HISTORY_STORE.is_enabled(),
+            "history_backend": HISTORY_STORE.backend_name,
+            "max_history_items": MAX_HISTORY_ITEMS,
             "features": [
                 "single-image AI detection",
                 "batch AI detection",
