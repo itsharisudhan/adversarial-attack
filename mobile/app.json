@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "AAD Mobile",
+    "slug": "aad-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow AAD Mobile to access your photos so you can analyze an image."
+        }
+      ]
+    ]
+  }
+}

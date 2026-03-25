@@ -9,5 +9,9 @@ web/gallery/
 venv/
 env/
 
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+
 .DS_Store
 Thumbs.db
