@@ -2,6 +2,7 @@ const MAX_BATCH_IMAGES = window.__AI_APP_CONFIG__.maxBatchImages;
 
 let selectedFiles = [];
 let loadingIntervalId = null;
+let historyEnabled = false;
 
 document.addEventListener("DOMContentLoaded", () => {
     bindUI();
@@ -36,9 +37,50 @@ async function loadStats() {
     try {
         const response = await fetch("/api/stats");
         const data = await response.json();
+        historyEnabled = Boolean(data.history_enabled);
         document.getElementById("appStatus").textContent = `Ready · ${data.max_batch_images} image max`;
+        setupHistoryState(data);
+        if (historyEnabled) {
+            loadHistory();
+        }
     } catch (error) {
         document.getElementById("appStatus").textContent = "Stats unavailable";
+    }
+}
+
+function setupHistoryState(stats) {
+    const panel = document.getElementById("historyPanel");
+    const backend = document.getElementById("historyBackend");
+    const hint = document.getElementById("historyHint");
+
+    if (!panel || !backend || !hint) {
+        return;
+    }
+
+    if (!historyEnabled) {
+        panel.hidden = true;
+        return;
+    }
+
+    backend.textContent = stats.history_backend || "Configured";
+    hint.textContent = "Each saved card shows the uploaded image plus FFT and ELA analysis outputs.";
+    panel.hidden = false;
+}
+
+async function loadHistory() {
+    if (!historyEnabled) {
+        return;
+    }
+
+    try {
+        const response = await fetch("/api/history");
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || "Could not load history");
+        }
+        renderHistory(data.results || []);
+    } catch (error) {
+        showNotification(error.message, "error");
     }
 }
 
@@ -126,6 +168,9 @@ async function analyzeBatch() {
 
         renderSummary(data.results);
         renderResults(data.results);
+        if (historyEnabled) {
+            loadHistory();
+        }
         showNotification("Analysis complete.", "success");
     } catch (error) {
         showNotification(error.message, "error");
@@ -223,7 +268,7 @@ function renderResults(results) {
                 <div class="details-grid">
                     ${renderDetailsBlock("Image", {
                         original_size: `${result.image_info.original_size[0]}x${result.image_info.original_size[1]}`,
-                        analyzed_size: `${result.image_info.analyzed_size[0]}x${result.image_info.analyzed_size[1]}`
+                        analyzed_size: `${result.image_info.analyzed_size[0]}x${result.image_info.analyzed_size[1]}`,
                     })}
                     ${renderDetailsBlock(result.detectors.fft.name, result.detectors.fft.details)}
                     ${renderDetailsBlock(result.detectors.ela.name, result.detectors.ela.details)}
@@ -235,6 +280,75 @@ function renderResults(results) {
 
         resultsStack.appendChild(card);
     });
+}
+
+function renderHistory(results) {
+    const grid = document.getElementById("historyGrid");
+    const panel = document.getElementById("historyPanel");
+
+    if (!grid || !panel || !historyEnabled) {
+        return;
+    }
+
+    panel.hidden = false;
+    if (!results.length) {
+        grid.innerHTML = `
+            <article class="history-empty">
+                <strong>No saved analyses yet</strong>
+                <span>Run an analysis to populate the review history.</span>
+            </article>
+        `;
+        return;
+    }
+
+    grid.innerHTML = results
+        .map((result) => {
+            const score = Number(result.ensemble_score || 0);
+            const verdictClass = getVerdictClass(score);
+            const scorePct = (score * 100).toFixed(1);
+            const createdAt = result.created_at
+                ? new Date(result.created_at).toLocaleString()
+                : "Saved recently";
+
+            return `
+                <article class="history-card">
+                    <div class="history-card-head">
+                        <div>
+                            <strong>${escapeHtml(result.filename || "image")}</strong>
+                            <span>${escapeHtml(createdAt)}</span>
+                        </div>
+                        <div class="verdict-chip ${verdictClass}">${escapeHtml(result.verdict || "Saved")}</div>
+                    </div>
+                    <div class="history-visual-strip">
+                        ${renderHistoryImage("Input", result.input_preview_url)}
+                        ${renderHistoryImage("FFT", result.fft_spectrum_url)}
+                        ${renderHistoryImage("ELA", result.ela_heatmap_url)}
+                    </div>
+                    <div class="mini-score-row">
+                        <span>AI probability ${scorePct}%</span>
+                        <span>${escapeHtml(result.verdict_short || "")}</span>
+                    </div>
+                </article>
+            `;
+        })
+        .join("");
+}
+
+function renderHistoryImage(label, imageSrc) {
+    if (!imageSrc) {
+        return `
+            <div class="history-thumb is-empty">
+                <span>${escapeHtml(label)}</span>
+            </div>
+        `;
+    }
+
+    return `
+        <figure class="history-thumb">
+            <img src="${imageSrc}" alt="${escapeHtml(label)}">
+            <figcaption>${escapeHtml(label)}</figcaption>
+        </figure>
+    `;
 }
 
 function renderDetectorCard(label, detector) {
@@ -433,7 +547,7 @@ function toTitleCase(value) {
 }
 
 function escapeHtml(value) {
-    return value
+    return String(value)
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
