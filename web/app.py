@@ -10,10 +10,16 @@ Supports:
 from flask import Flask, jsonify, render_template, request
 from PIL import Image
 import base64
+import hashlib
 import io
+import json
 import logging
 import os
 import threading
+try:
+    import redis
+except ModuleNotFoundError:
+    redis = None
 
 import numpy as np
 
@@ -31,6 +37,25 @@ MAX_HISTORY_ITEMS = 12
 HISTORY_PREVIEW_DIM = 256
 LOGGER = logging.getLogger(__name__)
 HISTORY_STORE = build_history_store()
+
+# Initialize Redis client for caching
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+if redis is None:
+    LOGGER.info("Redis package not installed; caching disabled.")
+    cache = None
+else:
+    try:
+        cache = redis.from_url(REDIS_URL, decode_responses=True)
+        cache.ping()
+        LOGGER.info("Connected to Redis cache: %s", REDIS_URL)
+    except Exception as exc:
+        LOGGER.warning("Redis cache unavailable: %s", exc)
+        cache = None
+
+
+def get_image_hash(image_bytes):
+    """Generate SHA-256 hash for image caching."""
+    return hashlib.sha256(image_bytes).hexdigest()
 
 
 def resize_for_analysis(image_pil):
@@ -413,8 +438,20 @@ def analyze_texture(image_np):
         return 0.5, {"error": str(exc)}
 
 
-def analyze_image(image_pil):
+def analyze_image(image_pil, image_bytes=None):
     """Run all detectors and return a serialized response object."""
+    cache_key = None
+    if cache and image_bytes:
+        cache_key = f"analysis:{get_image_hash(image_bytes)}"
+        try:
+            cached_result = cache.get(cache_key)
+            if cached_result:
+                result = json.loads(cached_result)
+                result["cached"] = True
+                return result
+        except Exception as exc:
+            LOGGER.warning("Redis cache read failed: %s", exc)
+
     image_resized = resize_for_analysis(image_pil)
     image_np = np.array(image_resized, dtype=np.float64)
 
@@ -458,7 +495,7 @@ def analyze_image(image_pil):
         ela_img = Image.fromarray(ela_visual).resize((256, 256), Image.LANCZOS)
         ela_data_url = image_to_data_url(ela_img)
 
-    return {
+    result = {
         "verdict": verdict,
         "verdict_short": verdict_short,
         "ensemble_score": round(float(ensemble_score), 4),
@@ -500,7 +537,17 @@ def analyze_image(image_pil):
             "original_size": list(image_pil.size),
             "analyzed_size": list(image_resized.size),
         },
+        "cached": False,
     }
+
+    if cache and cache_key:
+        try:
+            # Cache for 24 hours
+            cache.setex(cache_key, 86400, json.dumps(result))
+        except Exception as exc:
+            LOGGER.warning("Redis cache write failed: %s", exc)
+
+    return result
 
 
 def build_history_record(filename, image_pil, analysis_result):
@@ -539,8 +586,9 @@ def persist_history_async(records):
 
 def analyze_file_storage(file_storage):
     """Load and analyze one uploaded file."""
-    image = Image.open(io.BytesIO(file_storage.read())).convert("RGB")
-    result = analyze_image(image)
+    image_bytes = file_storage.read()
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    result = analyze_image(image, image_bytes=image_bytes)
     filename = file_storage.filename or "image"
     result["filename"] = filename
     result["_history_record"] = build_history_record(filename, image, result)

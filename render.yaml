@@ -1,4 +1,9 @@
 services:
+  - type: redis
+    name: redis-cache
+    plan: free # Use Render's free tier
+    ipAllowList: [] # Allow internal access only
+
   - type: web
     name: adversarial-detection
     runtime: python
@@ -7,5 +12,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
-      - key: PORT
-        value: 10000
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: redis-cache
+          property: connectionString
