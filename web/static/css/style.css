@@ -480,24 +480,80 @@ body {
     white-space: nowrap;
 }
 
+.is-clean {
+    color: white;
+    background: linear-gradient(135deg, var(--success), #285d2d);
+}
+
 .is-ai {
     color: white;
     background: linear-gradient(135deg, var(--danger), #9f223d);
 }
 
-.is-likely-ai {
+.is-adversarial {
+    color: white;
+    background: linear-gradient(135deg, #7c3aed, #5b21b6);
+}
+
+.is-tampered {
     color: white;
     background: linear-gradient(135deg, var(--warning), #b55d17);
 }
 
-.is-mixed {
+.is-duplicate {
     color: white;
-    background: linear-gradient(135deg, #8f6a2f, #bc9237);
+    background: linear-gradient(135deg, #0891b2, #155e75);
 }
 
-.is-real {
+.is-hybrid {
     color: white;
-    background: linear-gradient(135deg, var(--success), #285d2d);
+    background: linear-gradient(135deg, #be123c, #9f1239);
+}
+
+.score-row {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+}
+
+.score-bar-wrap {
+    padding: 0;
+}
+
+.score-bar-label {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+    font-size: 0.92rem;
+}
+
+.duplicate-warning {
+    margin-top: 14px;
+    padding: 14px 18px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(8, 145, 178, 0.12), rgba(21, 94, 117, 0.08));
+    border: 1px solid rgba(8, 145, 178, 0.3);
+    color: #155e75;
+    font-family: "Space Grotesk", sans-serif;
+    font-weight: 700;
+    font-size: 0.95rem;
+}
+
+.manifold-metrics {
+    margin-top: 20px;
+}
+
+.summary-clean strong { color: var(--success); }
+.summary-ai strong { color: var(--danger); }
+.summary-adv strong { color: #7c3aed; }
+.summary-dup strong { color: #0891b2; }
+.summary-tamper strong { color: var(--warning); }
+
+.pill-ready {
+    border-color: rgba(53, 122, 56, 0.4) !important;
+    background: rgba(53, 122, 56, 0.15) !important;
 }
 
 .verdict-bar-wrap {

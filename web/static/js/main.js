@@ -2,7 +2,6 @@ const MAX_BATCH_IMAGES = window.__AI_APP_CONFIG__.maxBatchImages;
 
 let selectedFiles = [];
 let loadingIntervalId = null;
-let historyEnabled = false;
 
 document.addEventListener("DOMContentLoaded", () => {
     bindUI();
@@ -37,50 +36,16 @@ async function loadStats() {
     try {
         const response = await fetch("/api/stats");
         const data = await response.json();
-        historyEnabled = Boolean(data.history_enabled);
-        document.getElementById("appStatus").textContent = `Ready · ${data.max_batch_images} image max`;
-        setupHistoryState(data);
-        if (historyEnabled) {
-            loadHistory();
+        document.getElementById("appStatus").textContent = `Ready`;
+        const advPill = document.getElementById("advHeadPill");
+        if (advPill) {
+            advPill.textContent = data.adversarial_head_ready
+                ? "Adversarial head: READY"
+                : "Adversarial head: forensic-only";
+            advPill.classList.toggle("pill-ready", data.adversarial_head_ready);
         }
     } catch (error) {
-        document.getElementById("appStatus").textContent = "Stats unavailable";
-    }
-}
-
-function setupHistoryState(stats) {
-    const panel = document.getElementById("historyPanel");
-    const backend = document.getElementById("historyBackend");
-    const hint = document.getElementById("historyHint");
-
-    if (!panel || !backend || !hint) {
-        return;
-    }
-
-    if (!historyEnabled) {
-        panel.hidden = true;
-        return;
-    }
-
-    backend.textContent = stats.history_backend || "Configured";
-    hint.textContent = "Each saved card shows the uploaded image plus FFT and ELA analysis outputs.";
-    panel.hidden = false;
-}
-
-async function loadHistory() {
-    if (!historyEnabled) {
-        return;
-    }
-
-    try {
-        const response = await fetch("/api/history");
-        const data = await response.json();
-        if (!response.ok) {
-            throw new Error(data.error || "Could not load history");
-        }
-        renderHistory(data.results || []);
-    } catch (error) {
-        showNotification(error.message, "error");
+        document.getElementById("appStatus").textContent = "Offline";
     }
 }
 
@@ -150,27 +115,31 @@ async function analyzeBatch() {
     }
 
     setAnalyzeButtonState(true);
-    showLoading(`Analyzing ${selectedFiles.length} image${selectedFiles.length === 1 ? "" : "s"}...`);
+    showLoading(`Analyzing ${selectedFiles.length} image${selectedFiles.length === 1 ? "" : "s"} with unified detection...`);
 
     try {
-        const formData = new FormData();
-        selectedFiles.forEach((file) => formData.append("images", file));
+        // Send each image to the unified endpoint
+        const results = [];
+        for (const file of selectedFiles) {
+            const formData = new FormData();
+            formData.append("image", file);
 
-        const response = await fetch("/api/detect_ai_batch", {
-            method: "POST",
-            body: formData,
-        });
+            const response = await fetch("/api/detect_unified", {
+                method: "POST",
+                body: formData,
+            });
 
-        const data = await response.json();
-        if (!response.ok) {
-            throw new Error(data.error || "Batch analysis failed");
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || `Analysis failed for ${file.name}`);
+            }
+
+            data.filename = file.name;
+            results.push(data);
         }
 
-        renderSummary(data.results);
-        renderResults(data.results);
-        if (historyEnabled) {
-            loadHistory();
-        }
+        renderSummary(results);
+        renderResults(results);
         showNotification("Analysis complete.", "success");
     } catch (error) {
         showNotification(error.message, "error");
@@ -180,45 +149,55 @@ async function analyzeBatch() {
     }
 }
 
+// ---- Summary ----
+
 function renderSummary(results) {
     const summaryPanel = document.getElementById("summaryPanel");
     const summaryGrid = document.getElementById("summaryGrid");
 
-    let aiCount = 0;
-    let uncertainCount = 0;
-    let realCount = 0;
+    let cleanCount = 0, aiCount = 0, advCount = 0, dupCount = 0, tamperCount = 0, hybridCount = 0;
 
-    results.forEach((result) => {
-        if (result.ensemble_score >= 0.40) {
-            aiCount += 1;
-        } else if (result.ensemble_score >= 0.25) {
-            uncertainCount += 1;
-        } else {
-            realCount += 1;
-        }
+    results.forEach((r) => {
+        const v = r.verdict || r.unified_verdict || "CLEAN";
+        if (v === "CLEAN") cleanCount++;
+        else if (v === "AI_GENERATED") aiCount++;
+        else if (v === "ADVERSARIAL_ATTACK") advCount++;
+        else if (v === "DUPLICATE_FRAUD") dupCount++;
+        else if (v === "TAMPERED") tamperCount++;
+        else if (v === "HYBRID_THREAT") hybridCount++;
     });
 
     summaryGrid.innerHTML = `
         <div class="summary-card">
-            <span class="summary-label">Images analyzed</span>
+            <span class="summary-label">Total analyzed</span>
             <strong>${results.length}</strong>
         </div>
-        <div class="summary-card">
-            <span class="summary-label">AI / likely AI</span>
+        <div class="summary-card summary-clean">
+            <span class="summary-label">Clean</span>
+            <strong>${cleanCount}</strong>
+        </div>
+        <div class="summary-card summary-ai">
+            <span class="summary-label">AI Generated</span>
             <strong>${aiCount}</strong>
         </div>
-        <div class="summary-card">
-            <span class="summary-label">Uncertain</span>
-            <strong>${uncertainCount}</strong>
+        <div class="summary-card summary-adv">
+            <span class="summary-label">Adversarial</span>
+            <strong>${advCount}</strong>
         </div>
-        <div class="summary-card">
-            <span class="summary-label">Likely real / real</span>
-            <strong>${realCount}</strong>
+        <div class="summary-card summary-dup">
+            <span class="summary-label">Duplicate</span>
+            <strong>${dupCount}</strong>
+        </div>
+        <div class="summary-card summary-tamper">
+            <span class="summary-label">Tampered / Hybrid</span>
+            <strong>${tamperCount + hybridCount}</strong>
         </div>
     `;
 
     summaryPanel.hidden = false;
 }
+
+// ---- Result Cards ----
 
 function renderResults(results) {
     const resultsStack = document.getElementById("resultsStack");
@@ -229,51 +208,126 @@ function renderResults(results) {
         card.className = "panel result-card";
         card.style.animationDelay = `${index * 0.08}s`;
 
-        const verdictClass = getVerdictClass(result.ensemble_score);
-        const scorePct = (result.ensemble_score * 100).toFixed(1);
+        const verdict = result.verdict || result.unified_verdict || "CLEAN";
+        const verdictClass = getVerdictClass(verdict);
+        const confidence = result.confidence || 0;
+        const advScore = result.adversarial_score || 0;
+        const genaiScore = result.genai_score || 0;
+        const isDuplicate = result.is_duplicate || false;
+        const details = result.details || {};
+
+        // Forensic scores
+        const forensic = details.forensic_detectors || {};
+        const fft = result.detectors?.fft || null;
+        const ela = result.detectors?.ela || null;
+        const stats = result.detectors?.statistics || null;
+        const texture = result.detectors?.texture || null;
 
         card.innerHTML = `
             <div class="result-head">
                 <div>
                     <p class="section-label">Result ${index + 1}</p>
-                    <h2>${escapeHtml(result.filename)}</h2>
+                    <h2>${escapeHtml(result.filename || "Image")}</h2>
                 </div>
-                <div class="verdict-chip ${verdictClass}">${escapeHtml(result.verdict)}</div>
+                <div class="verdict-chip ${verdictClass}">${formatVerdict(verdict)}</div>
             </div>
 
-            <div class="verdict-bar-wrap">
-                <div class="verdict-bar-label">
-                    <span>AI probability</span>
-                    <strong>${scorePct}%</strong>
+            <!-- Unified Scores -->
+            <div class="score-row">
+                <div class="score-item">
+                    <div class="score-bar-wrap">
+                        <div class="score-bar-label">
+                            <span>Confidence</span>
+                            <strong>${(confidence * 100).toFixed(1)}%</strong>
+                        </div>
+                        <div class="verdict-bar">
+                            <div class="verdict-bar-fill ${verdictClass}" style="width:${(confidence * 100).toFixed(1)}%"></div>
+                        </div>
+                    </div>
                 </div>
-                <div class="verdict-bar">
-                    <div class="verdict-bar-fill ${verdictClass}" style="width:${scorePct}%"></div>
+                <div class="score-item">
+                    <div class="score-bar-wrap">
+                        <div class="score-bar-label">
+                            <span>Adversarial Score</span>
+                            <strong>${(advScore * 100).toFixed(1)}%</strong>
+                        </div>
+                        <div class="verdict-bar">
+                            <div class="verdict-bar-fill is-adversarial" style="width:${(advScore * 100).toFixed(1)}%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="score-item">
+                    <div class="score-bar-wrap">
+                        <div class="score-bar-label">
+                            <span>GenAI Score</span>
+                            <strong>${(genaiScore * 100).toFixed(1)}%</strong>
+                        </div>
+                        <div class="verdict-bar">
+                            <div class="verdict-bar-fill is-ai" style="width:${(genaiScore * 100).toFixed(1)}%"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
+            ${isDuplicate ? '<div class="duplicate-warning">This image was previously submitted!</div>' : ''}
+
+            <!-- Manifold Metrics -->
+            ${details.lid_score != null ? `
+            <div class="metric-grid manifold-metrics">
+                <article class="metric-panel">
+                    <span class="metric-panel-label">Manifold</span>
+                    <h3>LID Score</h3>
+                    <p>Local Intrinsic Dimensionality. Higher = farther from clean image manifold.</p>
+                    <div class="mini-score-row">
+                        <span>${Number(details.lid_score).toFixed(2)}</span>
+                        <span>Threshold: ${details.lid_threshold || 60}</span>
+                    </div>
+                </article>
+                <article class="metric-panel">
+                    <span class="metric-panel-label">Manifold</span>
+                    <h3>Mahalanobis Distance</h3>
+                    <p>Statistical distance from the centroid of clean images.</p>
+                    <div class="mini-score-row">
+                        <span>${Number(details.mahalanobis_distance).toFixed(2)}</span>
+                        <span>Higher = more suspicious</span>
+                    </div>
+                </article>
+            </div>
+            ` : ''}
+
+            <!-- Forensic Detectors -->
+            ${fft || ela || stats || texture ? `
             <div class="metric-grid">
-                ${renderDetectorCard("FFT", result.detectors.fft)}
-                ${renderDetectorCard("ELA", result.detectors.ela)}
-                ${renderDetectorCard("Stats", result.detectors.statistics)}
-                ${renderDetectorCard("Texture", result.detectors.texture)}
+                ${fft ? renderDetectorCard("FFT", fft) : ''}
+                ${ela ? renderDetectorCard("ELA", ela) : ''}
+                ${stats ? renderDetectorCard("Stats", stats) : ''}
+                ${texture ? renderDetectorCard("Texture", texture) : ''}
             </div>
+            ` : ''}
 
+            <!-- Visualizations -->
+            ${result.visualizations ? `
             <div class="visual-grid">
                 ${renderVisualCard("FFT Spectrum", result.visualizations.fft_spectrum)}
                 ${renderVisualCard("ELA Heatmap", result.visualizations.ela_heatmap)}
             </div>
+            ` : ''}
 
             <details class="details-panel">
-                <summary>Detailed metrics</summary>
+                <summary>Raw detection data</summary>
                 <div class="details-grid">
-                    ${renderDetailsBlock("Image", {
-                        original_size: `${result.image_info.original_size[0]}x${result.image_info.original_size[1]}`,
-                        analyzed_size: `${result.image_info.analyzed_size[0]}x${result.image_info.analyzed_size[1]}`,
+                    ${renderDetailsBlock("Unified Verdict", {
+                        verdict: verdict,
+                        confidence: confidence.toFixed(4),
+                        adversarial_score: advScore.toFixed(4),
+                        genai_score: genaiScore.toFixed(4),
+                        is_duplicate: isDuplicate,
                     })}
-                    ${renderDetailsBlock(result.detectors.fft.name, result.detectors.fft.details)}
-                    ${renderDetailsBlock(result.detectors.ela.name, result.detectors.ela.details)}
-                    ${renderDetailsBlock(result.detectors.statistics.name, result.detectors.statistics.details)}
-                    ${renderDetailsBlock(result.detectors.texture.name, result.detectors.texture.details)}
+                    ${details.lid_score != null ? renderDetailsBlock("Manifold Analysis", {
+                        lid_score: details.lid_score,
+                        mahalanobis_distance: details.mahalanobis_distance,
+                    }) : ''}
+                    ${forensic && Object.keys(forensic).length ? renderDetailsBlock("Forensic Scores", forensic) : ''}
                 </div>
             </details>
         `;
@@ -282,76 +336,10 @@ function renderResults(results) {
     });
 }
 
-function renderHistory(results) {
-    const grid = document.getElementById("historyGrid");
-    const panel = document.getElementById("historyPanel");
-
-    if (!grid || !panel || !historyEnabled) {
-        return;
-    }
-
-    panel.hidden = false;
-    if (!results.length) {
-        grid.innerHTML = `
-            <article class="history-empty">
-                <strong>No saved analyses yet</strong>
-                <span>Run an analysis to populate the review history.</span>
-            </article>
-        `;
-        return;
-    }
-
-    grid.innerHTML = results
-        .map((result) => {
-            const score = Number(result.ensemble_score || 0);
-            const verdictClass = getVerdictClass(score);
-            const scorePct = (score * 100).toFixed(1);
-            const createdAt = result.created_at
-                ? new Date(result.created_at).toLocaleString()
-                : "Saved recently";
-
-            return `
-                <article class="history-card">
-                    <div class="history-card-head">
-                        <div>
-                            <strong>${escapeHtml(result.filename || "image")}</strong>
-                            <span>${escapeHtml(createdAt)}</span>
-                        </div>
-                        <div class="verdict-chip ${verdictClass}">${escapeHtml(result.verdict || "Saved")}</div>
-                    </div>
-                    <div class="history-visual-strip">
-                        ${renderHistoryImage("Input", result.input_preview_url)}
-                        ${renderHistoryImage("FFT", result.fft_spectrum_url)}
-                        ${renderHistoryImage("ELA", result.ela_heatmap_url)}
-                    </div>
-                    <div class="mini-score-row">
-                        <span>AI probability ${scorePct}%</span>
-                        <span>${escapeHtml(result.verdict_short || "")}</span>
-                    </div>
-                </article>
-            `;
-        })
-        .join("");
-}
-
-function renderHistoryImage(label, imageSrc) {
-    if (!imageSrc) {
-        return `
-            <div class="history-thumb is-empty">
-                <span>${escapeHtml(label)}</span>
-            </div>
-        `;
-    }
-
-    return `
-        <figure class="history-thumb">
-            <img src="${imageSrc}" alt="${escapeHtml(label)}">
-            <figcaption>${escapeHtml(label)}</figcaption>
-        </figure>
-    `;
-}
+// ---- Helpers ----
 
 function renderDetectorCard(label, detector) {
+    if (!detector) return '';
     const scorePct = (detector.score * 100).toFixed(1);
     return `
         <article class="metric-panel">
@@ -407,18 +395,31 @@ function renderDetailsBlock(title, details) {
     `;
 }
 
-function getVerdictClass(score) {
-    if (score >= 0.55) {
-        return "is-ai";
-    }
-    if (score >= 0.40) {
-        return "is-likely-ai";
-    }
-    if (score >= 0.25) {
-        return "is-mixed";
-    }
-    return "is-real";
+function formatVerdict(verdict) {
+    const map = {
+        CLEAN: "Clean",
+        AI_GENERATED: "AI Generated",
+        ADVERSARIAL_ATTACK: "Adversarial Attack",
+        TAMPERED: "Tampered",
+        DUPLICATE_FRAUD: "Duplicate Fraud",
+        HYBRID_THREAT: "Hybrid Threat",
+    };
+    return map[verdict] || verdict;
 }
+
+function getVerdictClass(verdict) {
+    const map = {
+        CLEAN: "is-clean",
+        AI_GENERATED: "is-ai",
+        ADVERSARIAL_ATTACK: "is-adversarial",
+        TAMPERED: "is-tampered",
+        DUPLICATE_FRAUD: "is-duplicate",
+        HYBRID_THREAT: "is-hybrid",
+    };
+    return map[verdict] || "is-clean";
+}
+
+// ---- Loading / Toast ----
 
 function showLoading(message) {
     let overlay = document.getElementById("loadingOverlay");
@@ -458,19 +459,19 @@ function startLoadingProgress() {
 
     const fill = document.getElementById("loadingProgressFill");
     const label = document.getElementById("loadingProgressLabel");
-    if (!fill || !label) {
-        return;
-    }
+    if (!fill || !label) return;
 
     const stages = [
-        { progress: 18, label: "Preparing files" },
-        { progress: 38, label: "Uploading batch" },
-        { progress: 64, label: "Running forensic detectors" },
-        { progress: 86, label: "Collecting scores" },
+        { progress: 12, label: "Uploading images" },
+        { progress: 30, label: "Extracting EfficientNet embeddings" },
+        { progress: 50, label: "Running LID + Mahalanobis analysis" },
+        { progress: 68, label: "Running forensic detectors (FFT, ELA)" },
+        { progress: 82, label: "Checking duplicate submissions" },
+        { progress: 92, label: "Fusing detection signals" },
     ];
     let index = 0;
 
-    fill.style.width = "8%";
+    fill.style.width = "5%";
     label.textContent = stages[0].label;
 
     loadingIntervalId = window.setInterval(() => {
@@ -480,10 +481,9 @@ function startLoadingProgress() {
             index += 1;
             return;
         }
-
-        fill.style.width = "92%";
-        label.textContent = "Finalizing results";
-    }, 550);
+        fill.style.width = "95%";
+        label.textContent = "Finalizing verdict";
+    }, 600);
 }
 
 function stopLoadingProgress() {
@@ -494,27 +494,18 @@ function stopLoadingProgress() {
 
     const fill = document.getElementById("loadingProgressFill");
     const label = document.getElementById("loadingProgressLabel");
-    if (fill) {
-        fill.style.width = "100%";
-    }
-    if (label) {
-        label.textContent = "Analysis complete";
-    }
+    if (fill) fill.style.width = "100%";
+    if (label) label.textContent = "Analysis complete";
 
     window.setTimeout(() => {
         const liveFill = document.getElementById("loadingProgressFill");
-        if (liveFill) {
-            liveFill.style.width = "0%";
-        }
+        if (liveFill) liveFill.style.width = "0%";
     }, 160);
 }
 
 function setAnalyzeButtonState(isBusy) {
     const button = document.getElementById("btnAnalyzeBatch");
-    if (!button) {
-        return;
-    }
-
+    if (!button) return;
     button.disabled = isBusy;
     button.textContent = isBusy ? "Analyzing..." : "Analyze Images";
 }
@@ -533,12 +524,8 @@ function showNotification(message, type) {
 }
 
 function formatFileSize(size) {
-    if (size < 1024) {
-        return `${size} B`;
-    }
-    if (size < 1024 * 1024) {
-        return `${(size / 1024).toFixed(1)} KB`;
-    }
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
     return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 

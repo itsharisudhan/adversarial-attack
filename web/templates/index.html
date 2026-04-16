@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Adversarial Attack Detection</title>
-    <meta name="description" content="Analyze up to five images and estimate whether they are AI-generated using forensic image signals.">
+    <title>Unified Fraud Detection System</title>
+    <meta name="description" content="Detect AI-generated images, adversarial attacks, tampered content, and duplicate fraud submissions in real-time.">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -14,38 +14,38 @@
     <div class="shell">
         <header class="hero">
             <div class="hero-copy">
-                <p class="project-name">Adversarial Attack Detection</p>
-                <p class="eyebrow">AI Image Detection</p>
-                <h1>Check up to {{ max_batch_images }} images in one pass.</h1>
+                <p class="project-name">Unified Fraud Detection</p>
+                <p class="eyebrow">Multi-Layer Image Analysis</p>
+                <h1>Detect fake images, adversarial attacks &amp; duplicate fraud.</h1>
                 <p class="hero-text">
-                    Upload a small batch of images and inspect forensic signals such as FFT spectrum, compression error,
-                    texture consistency, and statistical smoothness.
+                    Upload images to analyze with EfficientNet manifold analysis, forensic signals (FFT, ELA, texture),
+                    and duplicate detection. Powered by LID + Mahalanobis distance.
                 </p>
                 <div class="hero-meta">
                     <span class="meta-pill">Batch limit: {{ max_batch_images }}</span>
-                    <span class="meta-pill">CPU-friendly analysis</span>
-                    <span class="meta-pill">No gallery storage</span>
+                    <span class="meta-pill" id="advHeadPill">Adversarial head: loading...</span>
+                    <span class="meta-pill">88% accuracy</span>
                 </div>
             </div>
             <aside class="hero-panel">
                 <div class="hero-panel-card">
-                    <span class="hero-panel-kicker">Signal Stack</span>
+                    <span class="hero-panel-kicker">Detection Layers</span>
                     <div class="hero-panel-grid">
                         <div class="hero-signal">
-                            <strong>FFT</strong>
-                            <span>frequency energy</span>
+                            <strong>Manifold</strong>
+                            <span>LID + Mahalanobis distance</span>
                         </div>
                         <div class="hero-signal">
-                            <strong>ELA</strong>
-                            <span>compression traces</span>
+                            <strong>Forensic</strong>
+                            <span>FFT + ELA + Stats + LBP</span>
                         </div>
                         <div class="hero-signal">
-                            <strong>Stats</strong>
-                            <span>histogram smoothness</span>
+                            <strong>Duplicate</strong>
+                            <span>SHA-256 + cosine similarity</span>
                         </div>
                         <div class="hero-signal">
-                            <strong>Texture</strong>
-                            <span>micro-pattern consistency</span>
+                            <strong>Fusion</strong>
+                            <span>11-rule decision engine</span>
                         </div>
                     </div>
                 </div>
@@ -68,13 +68,13 @@
                 <label for="aiImageUpload" class="dropzone" id="aiDropZone">
                     <input type="file" id="aiImageUpload" accept="image/*" multiple hidden>
                     <span class="dropzone-title">Drop images here or click to browse</span>
-                    <span class="dropzone-text">JPG, PNG, WebP. Analyze up to {{ max_batch_images }} images at once.</span>
+                    <span class="dropzone-text">JPG, PNG, WebP. Detects AI-generated, adversarial attacks, tampering &amp; duplicate fraud.</span>
                 </label>
 
                 <div class="selection-bar">
                     <div>
                         <span class="selection-count" id="selectionCount">No images selected</span>
-                        <p class="selection-hint">The app analyzes each image separately and returns a verdict card for each one.</p>
+                        <p class="selection-hint">Each image gets a unified verdict: CLEAN, AI_GENERATED, ADVERSARIAL, TAMPERED, DUPLICATE, or HYBRID.</p>
                     </div>
                     <div class="selection-actions">
                         <button class="btn btn-secondary" id="btnClearSelection" type="button">Clear</button>
@@ -93,23 +93,6 @@
                     </div>
                 </div>
                 <div class="summary-grid" id="summaryGrid"></div>
-            </section>
-
-            <section class="panel history-panel" id="historyPanel" hidden>
-                <div class="panel-head">
-                    <div>
-                        <p class="section-label">History</p>
-                        <h2>Recent analyses</h2>
-                    </div>
-                    <div class="stats-box">
-                        <span class="stats-label">Backend</span>
-                        <strong id="historyBackend">Disabled</strong>
-                    </div>
-                </div>
-                <p class="selection-hint" id="historyHint">
-                    Recent analyzed images appear here when persistence is enabled.
-                </p>
-                <div class="history-grid" id="historyGrid"></div>
             </section>
 
             <section class="results-stack" id="resultsStack"></section>

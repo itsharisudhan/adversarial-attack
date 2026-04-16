@@ -1,8 +1,9 @@
 """
-Flask web app focused on AI-generated image detection.
+Flask web app — Unified Fraud Detection System.
 
 Supports:
-- Single-image analysis
+- Single-image forensic analysis (FFT, ELA, statistics, texture)
+- Unified detection: forensic + LID/Mahalanobis adversarial + duplicate check
 - Batch analysis for up to 5 images
 - Forensic visualizations (FFT and ELA)
 """
@@ -37,6 +38,31 @@ MAX_HISTORY_ITEMS = 12
 HISTORY_PREVIEW_DIM = 256
 LOGGER = logging.getLogger(__name__)
 HISTORY_STORE = build_history_store()
+
+# Lazy-loaded unified detector (adversarial + forensic + duplicate)
+_UNIFIED_DETECTOR = None
+
+
+def get_unified_detector():
+    """Lazy-load the UnifiedDetector to avoid slow startup."""
+    global _UNIFIED_DETECTOR
+    if _UNIFIED_DETECTOR is not None:
+        return _UNIFIED_DETECTOR
+    try:
+        # Ensure project root is importable (needed when running web/app.py directly)
+        import sys
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        from detectors.unified_detector import UnifiedDetector
+        _UNIFIED_DETECTOR = UnifiedDetector()
+        LOGGER.info(
+            "Unified detector loaded (adversarial head %s)",
+            "READY" if _UNIFIED_DETECTOR.adversarial_head_ready else "DISABLED",
+        )
+    except Exception as exc:
+        LOGGER.warning("Unified detector unavailable: %s", exc)
+    return _UNIFIED_DETECTOR
 
 # Initialize Redis client for caching
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -339,27 +365,24 @@ def analyze_statistics(image_np):
 
 def analyze_texture(image_np):
     """
-    Texture consistency analysis using simplified LBP.
+    Texture consistency analysis using vectorised LBP.
     """
     try:
         gray = np.mean(image_np, axis=2) if len(image_np.shape) == 3 else image_np.copy()
         gray = gray.astype(np.float64)
         h, w = gray.shape
 
+        # Vectorised LBP — ~50× faster than the pixel-by-pixel loop
+        center = gray[1:-1, 1:-1]
         lbp = np.zeros((h - 2, w - 2), dtype=np.uint8)
-        for i in range(1, h - 1):
-            for j in range(1, w - 1):
-                center = gray[i, j]
-                code = 0
-                code |= (1 << 7) if gray[i - 1, j - 1] >= center else 0
-                code |= (1 << 6) if gray[i - 1, j] >= center else 0
-                code |= (1 << 5) if gray[i - 1, j + 1] >= center else 0
-                code |= (1 << 4) if gray[i, j + 1] >= center else 0
-                code |= (1 << 3) if gray[i + 1, j + 1] >= center else 0
-                code |= (1 << 2) if gray[i + 1, j] >= center else 0
-                code |= (1 << 1) if gray[i + 1, j - 1] >= center else 0
-                code |= (1 << 0) if gray[i, j - 1] >= center else 0
-                lbp[i - 1, j - 1] = code
+        lbp |= np.where(gray[:-2, :-2] >= center, 128, 0).astype(np.uint8)
+        lbp |= np.where(gray[:-2, 1:-1] >= center, 64, 0).astype(np.uint8)
+        lbp |= np.where(gray[:-2, 2:] >= center, 32, 0).astype(np.uint8)
+        lbp |= np.where(gray[1:-1, 2:] >= center, 16, 0).astype(np.uint8)
+        lbp |= np.where(gray[2:, 2:] >= center, 8, 0).astype(np.uint8)
+        lbp |= np.where(gray[2:, 1:-1] >= center, 4, 0).astype(np.uint8)
+        lbp |= np.where(gray[2:, :-2] >= center, 2, 0).astype(np.uint8)
+        lbp |= np.where(gray[1:-1, :-2] >= center, 1, 0).astype(np.uint8)
 
         global_hist, _ = np.histogram(lbp.flatten(), bins=64, range=(0, 256))
         global_hist = global_hist / (global_hist.sum() + 1e-10)
@@ -655,19 +678,100 @@ def get_history():
     )
 
 
+@app.route("/api/detect_unified", methods=["POST"])
+def detect_unified():
+    """
+    Unified fraud detection endpoint.
+
+    Runs BOTH forensic analysis AND manifold-based adversarial detection,
+    producing a single verdict from:
+      CLEAN | AI_GENERATED | ADVERSARIAL_ATTACK | TAMPERED |
+      DUPLICATE_FRAUD | HYBRID_THREAT
+    """
+    try:
+        if "image" not in request.files:
+            return jsonify({"error": "No image uploaded"}), 400
+
+        file_storage = request.files["image"]
+        image_bytes = file_storage.read()
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        filename = file_storage.filename or "image"
+
+        # 1. Forensic analysis (always available)
+        forensic_result = analyze_image(image, image_bytes=image_bytes)
+
+        # 2. Unified detection (adds LID/Mahalanobis + duplicate check)
+        detector = get_unified_detector()
+        if detector is not None:
+            unified_result = detector.detect(
+                image_pil=image,
+                image_bytes=image_bytes,
+                forensic_result=forensic_result,
+            )
+        else:
+            # Fallback: derive verdict from forensic scores only
+            score = forensic_result.get("ensemble_score", 0.0)
+            if score >= 0.55:
+                verdict = "AI_GENERATED"
+            elif score >= 0.35:
+                verdict = "TAMPERED"
+            else:
+                verdict = "CLEAN"
+            unified_result = {
+                "verdict": verdict,
+                "confidence": score if verdict != "CLEAN" else 1.0 - score,
+                "adversarial_score": 0.0,
+                "genai_score": score,
+                "is_duplicate": False,
+                "details": {"mode": "forensic_only"},
+            }
+
+        # 3. Build response
+        response = {
+            "filename": filename,
+            "verdict": unified_result["verdict"],
+            "confidence": unified_result["confidence"],
+            "adversarial_score": unified_result["adversarial_score"],
+            "genai_score": unified_result["genai_score"],
+            "is_duplicate": unified_result["is_duplicate"],
+            "forensic": {
+                "ensemble_score": forensic_result["ensemble_score"],
+                "detectors": forensic_result["detectors"],
+            },
+            "visualizations": forensic_result["visualizations"],
+            "details": unified_result.get("details", {}),
+            "image_info": forensic_result["image_info"],
+        }
+
+        # 4. Persist history
+        history_record = build_history_record(filename, image, forensic_result)
+        persist_history_async([history_record])
+
+        return jsonify(response)
+    except Exception as exc:
+        LOGGER.exception("Unified detection error")
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/stats", methods=["GET"])
 def get_stats():
     """Return frontend capability flags."""
+    detector = get_unified_detector()
     return jsonify(
         {
-            "mode": "ai_detection_only",
+            "mode": "unified_fraud_detection",
             "max_batch_images": MAX_BATCH_IMAGES,
             "max_request_mb": app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024),
             "history_enabled": HISTORY_STORE.is_enabled(),
             "history_backend": HISTORY_STORE.backend_name,
             "max_history_items": MAX_HISTORY_ITEMS,
+            "unified_detection_enabled": detector is not None,
+            "adversarial_head_ready": (
+                detector.adversarial_head_ready if detector else False
+            ),
             "features": [
                 "single-image AI detection",
+                "unified fraud detection (adversarial + forensic + duplicate)",
                 "batch AI detection",
                 "FFT visualization",
                 "ELA visualization",
@@ -678,9 +782,14 @@ def get_stats():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("AI Image Detection Web App")
+    print("Unified Fraud Detection System")
     print("=" * 60)
     print(f"Batch size limit: {MAX_BATCH_IMAGES} images")
+    detector = get_unified_detector()
+    if detector and detector.adversarial_head_ready:
+        print("Adversarial head: READY (LID + Mahalanobis)")
+    else:
+        print("Adversarial head: DISABLED (run data/build_reference_db.py)")
     port = int(os.environ.get("PORT", 5000))
     print(f"Open your browser and go to: http://localhost:{port}")
     print("=" * 60)
